@@ -2,25 +2,50 @@
     {
       "word": "essential",
       "translation": "необходимый",
+      "wrong_answers": [
+        "необязательный",
+        "второстепенный",
+        "дополнительный"
+      ],      
       "example": "It is essential to speak English"
     },
     {
       "word": "approach",
+      "wrong_answers":[
+        "метод",
+        "стратегия",
+        "план"
+      ],
       "translation": "подход",
       "example": "We need a new approach to solve the problem"
     },
     {
         "word": "benefit",
+        "wrong_answers":[
+          "второстепенный",
+          "дополнительный",
+          "необязательный"
+        ],
         "translation": "выгода",
         "example": "The new policy will benefit everyone"
     },
     {
         "word": "challenge",
+        "wrong_answers":[
+          "препятствие",
+          "проблема",
+          "задача"
+        ],
         "translation": "вызов",
         "example": "This project presents a significant challenge"
     },
     {
         "word": "contribute",
+        "wrong_answers":[
+          "хранить",
+          "добавлять",
+          "участвовать"
+        ],
         "translation": "вносить вклад",
         "example": "Everyone can contribute to the success of the team"
     }
