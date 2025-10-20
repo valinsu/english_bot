@@ -1,93 +1,90 @@
 import os
-import asyncio
-import random
-import nest_asyncio
-from datetime import datetime, time, timedelta
-
-from telegram import BotCommand
-from telegram.ext import ApplicationBuilder, CommandHandler
+import sys
+from telegram import Update
+from telegram.ext import ContextTypes
+from db import add_subscriber, get_all_subscribers, save_sent_message, is_message_sent
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
-
-# Импорт обработчиков
-from handlers import start, handle_sentmsg, handle_sentmsg_ai
-from db import init_db
 
 # Подгружаем .env
 load_dotenv()
+sys.stdout.reconfigure(encoding='utf-8')
 
-nest_asyncio.apply()
+ADMIN_ID = os.getenv("ADMIN_ID")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+ADMIN_ID = int(ADMIN_ID)
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("❌ BOT_TOKEN is not set in .env")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    add_subscriber(user.id, user.username or "unknown")
+    await update.message.reply_text("💌 Ты теперь подписан на поток милостей!")
 
 
-def schedule_random_ai_messages(scheduler, app):
-    """
-    Планирует 4 случайных запуска handle_sentmsg_ai между 10:00 и 21:00.
-    """
-    now = datetime.now()
-    today = now.date()
-    times = []
+async def handle_sentmsg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 Только админ может использовать эту команду.")
+        return
 
-    # Генерируем 4 случайных времени между 10:00 и 21:00
-    for _ in range(4):
-        hour = random.randint(10, 20)  # до 20 включительно, т.к. 21:00 — верхняя граница
-        minute = random.randint(0, 59)
-        t = datetime.combine(today, time(hour, minute))
-        if t > now:
-            times.append(t)
+    if not context.args:
+        await update.message.reply_text("⚠️ Используй: /sentmsg текст_сообщения")
+        return
 
-    # Сортируем для аккуратности
-    times.sort()
+    text_to_send = " ".join(context.args)
+    subscribers = get_all_subscribers()
 
-    for t in times:
-        print(f"🕒 Scheduled AI message at {t.strftime('%H:%M')}")
-        scheduler.add_job(
-            handle_sentmsg_ai,
-            trigger=DateTrigger(run_date=t),
-            args=(app.bot, None),  # передаём bot; update=None, если не вызывается вручную
+    sent_count = 0
+    for user_id, username in subscribers:
+        if not is_message_sent(user_id, text_to_send):
+            try:
+                await context.bot.send_message(chat_id=user_id, text=text_to_send)
+                save_sent_message(user_id, text_to_send)
+                sent_count += 1
+            except Exception as e:
+                print(f"Не удалось отправить пользователю {user_id}: {e}")
+
+    await update.message.reply_text(f"✅ Сообщение отправлено {sent_count} пользователям.")
+
+
+async def handle_sentmsg_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("🚫 Только админ может использовать эту команду.")
+        return
+
+    await update.message.reply_text("💫 Генерирую комплимент...")
+
+    try:
+        client = AsyncOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            default_headers={
+                "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY')}",
+                "HTTP-Referer": "https://t.me/carpe_diem_events_record_bot"
+            }
+        )        
+        
+
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Ты — доброжелательный бот, который придумывает тёплые и милые комплименты на русском языке."},
+                {"role": "user", "content": "Сгенерируй один короткий, оригинальный и ласковый комплимент."}
+            ]
         )
 
+        compliment = response.choices[0].message.content.strip()
 
-async def main():
-    # Инициализация базы данных
-    init_db()
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+        subscribers = get_all_subscribers()
+        sent_count = 0
+        for user_id, username in subscribers:
+            if not is_message_sent(user_id, compliment):
+                try:
+                    await context.bot.send_message(chat_id=user_id, text=compliment)
+                    save_sent_message(user_id, compliment)
+                    sent_count += 1
+                except Exception as e:
+                    print(f"Ошибка при отправке {user_id}: {e}")
 
-    # Команды
-    await app.bot.set_my_commands([
-        BotCommand("start", "Start the bot"),
-        BotCommand("sentmsg", "Send text to all subscribers (admin only)"),
-        BotCommand("sentmsg_ai", "Send AI-generated message to all (admin only)")
-    ])
+        await update.message.reply_text(f"Комплимент отправлен {sent_count} пользователям:\n\n{compliment}")
 
-    # Планировщик
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.start()
-
-    # Ежедневное переназначение случайных запусков
-    scheduler.add_job(
-        schedule_random_ai_messages,
-        trigger="cron",
-        hour=0,
-        minute=5,
-        args=[scheduler, app],
-    )
-
-    # Первый запуск планирования
-    schedule_random_ai_messages(scheduler, app)
-
-    # Обработчики команд
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("sentmsg", handle_sentmsg))
-    app.add_handler(CommandHandler("sentmsg_ai", handle_sentmsg_ai))
-
-    print("Bot is running...")
-    await app.run_polling()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    except Exception as e:
+        await update.message.reply_text(f"Ошибка при генерации: {e}")
